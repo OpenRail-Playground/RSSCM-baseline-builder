@@ -17,5 +17,8 @@ build-backend = "hatchling.build"
 [project.scripts]
 rsscm-import = "rsscm_import.cli:main"
 
+[dependency-groups]
+dev = ["pytest==8.3.4"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["rsscm_import"]
