@@ -49,6 +49,17 @@ def test_whitespace_robust_matching():
     assert result[0]["status"] == "UPDATED"  # matched despite whitespace differences
 
 
+def test_pdf_whitespace_artifact_matching():
+    """PDF extraction can inject a spurious space into a long token; identity
+    must still match so it isn't reported as a false NEW (Train Radio bug)."""
+    delivery = [_item("Train Radio", "Train Radio Unit",
+                      "Funkwerk_MESA23-MST-KONF_20XX- XX-XX.msi", "4.9.5", level="Software component")]
+    current = [_item("Train Radio", "Train Radio Unit",
+                     "Funkwerk_MESA23-MST-KONF_20XX-XX-XX.msi", "4.9.5", level="Software component")]
+    result = compute_diff(delivery, current)
+    assert result[0]["status"] == "UNCHANGED"
+
+
 def test_summarize_counts():
     delivery = [_item("A", "B", "SW1", "2.0"), _item("A", "B", "SW2", "1.0")]
     current = [_item("A", "B", "SW1", "1.0"), _item("A", "B", "SW2", "1.0")]

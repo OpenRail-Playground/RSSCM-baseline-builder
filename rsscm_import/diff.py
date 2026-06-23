@@ -20,8 +20,14 @@ import re
 
 
 def _norm(s: str) -> str:
-    """Normalize a label for matching: strip + collapse internal whitespace."""
-    return re.sub(r"\s+", " ", (s or "").strip())
+    """Normalize a label for matching.
+
+    Removes *all* whitespace and lowercases. PDF/text extraction frequently
+    injects spurious spaces into long tokens (e.g. a filename comes out as
+    '..._20XX- XX-XX.msi' instead of '..._20XX-XX-XX.msi'); collapsing runs is
+    not enough, so we strip whitespace entirely for identity comparison.
+    """
+    return re.sub(r"\s+", "", (s or "")).lower()
 
 
 def _as_dict(item) -> dict:

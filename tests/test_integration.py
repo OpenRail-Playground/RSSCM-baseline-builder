@@ -65,6 +65,18 @@ def test_brake_unchanged(changes):
     assert brake is None
 
 
+def test_train_radio_unchanged(changes):
+    """Colleague item 10: Train Radio has no change. Regression guard for the
+    PDF whitespace artifact ('..._20XX- XX-XX.msi') that produced a false NEW."""
+    assert not any("Train Radio" in c["subsystem"] for c in changes)
+
+
+def test_no_false_new(changes):
+    """For this delivery/CMDB pair every real change is a version bump; a NEW
+    would signal a node-identity mismatch (parser/whitespace artifact)."""
+    assert all(c["status"] == "UPDATED" for c in changes)
+
+
 def test_change_count_is_small(changes):
     """The clean baseline should be a handful of changes, not dozens of
     duplicate rows (deduplicated, set-based diff)."""
