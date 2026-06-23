@@ -1,36 +1,38 @@
-"""CMDB reader — load current train state from Excel export or API."""
-from pathlib import Path
+"""CMDB reader — load current train state from export (Excel/zip) or API."""
+from __future__ import annotations
+
 from typing import Protocol
 
-from rsscm_import.ladeliste import parse_ladeliste
+from rsscm_import.delivery import parse_delivery
 
 
 class CmdbReader(Protocol):
     def read(self) -> list[dict]:
-        """Return current train state as list of software items."""
+        """Return current train state as a list of normalized item dicts."""
         ...
 
 
-class ExcelCmdbReader:
+class FileCmdbReader:
+    """Reads current state from a file/zip export, via the parser registry."""
+
     def __init__(self, path: str):
         self.path = path
 
     def read(self) -> list[dict]:
-        return parse_ladeliste(self.path)
+        return [it.to_dict() for it in parse_delivery(self.path)]
 
 
 class ApiCmdbReader:
-    """Stub — reads current state from Django API when available."""
+    """Reads current state from the Django API (current baseline)."""
 
     def __init__(self, api_url: str):
         self.api_url = api_url
 
     def read(self) -> list[dict]:
-        # TODO: implement when API is available
-        raise NotImplementedError("API reader not yet implemented — use Excel export for now.")
+        # TODO: assemble current state from /software-items/ + /software-releases/
+        raise NotImplementedError("API CMDB reader not yet implemented — use a file export.")
 
 
 def read_current_state(path: str) -> list[dict]:
-    """Read current train state from CMDB export (Excel/CSV/zip)."""
-    reader = ExcelCmdbReader(path)
-    return reader.read()
+    """Read current train state from a CMDB export (Excel/zip)."""
+    return FileCmdbReader(path).read()
