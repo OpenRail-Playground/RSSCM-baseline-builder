@@ -1,0 +1,26 @@
+[project]
+name = "rsscm-baseline-builder"
+version = "0.1.0"
+description = "Magic Import Pipeline — normalize vendor software deliveries into the RSSCM standard data model"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "click==8.1.8",
+    "openpyxl==3.1.5",
+    "httpx==0.28.1",
+    "python-docx==1.1.2",
+    "pdfplumber==0.11.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+rsscm-import = "rsscm_import.cli:main"
+
+[dependency-groups]
+dev = ["pytest==8.3.4"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["rsscm_import"]
