@@ -23,6 +23,20 @@ if [ ! -d "$VENV" ]; then
   "$VENV/bin/pip" install -q "django>=5.2" django-ninja django-extensions
 fi
 
+# The /graph view imports pygraphviz at startup, so it must be installed.
+# pygraphviz needs the system graphviz library (brew install graphviz).
+if ! "$VENV/bin/python" -c "import pygraphviz" 2>/dev/null; then
+  if command -v brew >/dev/null 2>&1 && brew --prefix graphviz >/dev/null 2>&1; then
+    GVIZ="$(brew --prefix graphviz)"
+    echo "Installing pygraphviz against $GVIZ ..."
+    CFLAGS="-I$GVIZ/include" LDFLAGS="-L$GVIZ/lib" "$VENV/bin/pip" install -q "pygraphviz>=1.14"
+  else
+    echo "ERROR: system graphviz not found. Install it first:  brew install graphviz"
+    echo "       then re-run this script."
+    exit 1
+  fi
+fi
+
 cd "$RSSCM/rsscm"
 "$VENV/bin/python" manage.py migrate
 

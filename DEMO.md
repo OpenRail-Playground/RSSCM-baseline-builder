@@ -14,9 +14,10 @@ chmod +x scripts/*.sh
 
 Admin login: **`admin`** / **`hack4rail2026`** → http://127.0.0.1:8000/admin/
 
-> The backend runs in a local `.demo-venv` (runtime deps only) so it works even
-> though the upstream project pins `pygraphviz` (needs system graphviz, ER-diagram
-> only). The SQLite DB lives in the RSSCM repo and is shared regardless of venv.
+> Prerequisite: **graphviz** (`brew install graphviz`) — the backend's `/graph/`
+> view imports `pygraphviz` at startup. `demo_backend.sh` builds `pygraphviz`
+> into a local `.demo-venv` against the brew graphviz and runs migrations. The
+> SQLite DB lives in the RSSCM repo and is shared regardless of venv.
 
 ## The pitch (Terminal 2, in this repo)
 
@@ -44,6 +45,7 @@ uv run rsscm-import populate \
 - http://127.0.0.1:8000/admin/software/softwareitem/ — 91 software items
 - http://127.0.0.1:8000/admin/software/softwarerelease/ — 96 releases
 - http://127.0.0.1:8000/admin/software/component/ — 48 components
+- http://127.0.0.1:8000/graph/ — backend's built-in graph visualization
 
 **5. Query back — the business questions:**
 
