@@ -87,13 +87,14 @@ class RsscmApiClient:
 
     def create_software_release(self, item_id: int, version_string: str,
                                 release_archive_hash: str = "", release_archive_link: str = "",
-                                sbom_reference: str = "") -> dict:
+                                sbom_reference: str = "", parent_ids: list[int] | None = None) -> dict:
         payload = {
             "item_id": item_id,
             "version_string": version_string,
             "release_archive_hash": release_archive_hash or None,
             "release_archive_link": release_archive_link or None,
             "sbom_reference": sbom_reference or None,
+            "parent_ids": [p for p in (parent_ids or []) if p is not None],
         }
         return self._post("software-releases", payload)
 
@@ -183,14 +184,30 @@ def populate_full_baseline(current_items: list[dict], changes: list[dict],
         if v and v not in g["versions"]:
             g["versions"].append(v)
 
-    # 2. seed items + ONE current release each, remembering item ids + version.
-    #    (The source can list the same item at different versions across car
-    #    instances/variants; for a single train baseline we take one current
-    #    version, so a later delivery version shows up cleanly as "needs update".)
+    # 2. seed items + ONE current release each, building the hierarchy:
+    #       Train Baseline  ->  Subsystem Baseline  ->  Software item
+    #    (Components hang off software items via component_id.) We process the
+    #    levels parent-first so each child can point at an existing parent, and
+    #    we mirror the same tree on the releases (M2M parent) so list_parents()
+    #    and the /graph view show a connected structure instead of orphans.
+    #
+    #    One current version per item: the source can list the same item at
+    #    different versions across car instances; for a single train baseline we
+    #    take one, so a later delivery version shows up cleanly as "needs update".
+    level_rank = {"Train baseline": 0, "Subsystem": 1, "Software": 2}
+    ordered = sorted(groups.items(), key=lambda kv: level_rank.get(kv[0][2], 99))
+
     item_ids: dict[tuple, int] = {}
     seeded_version: dict[tuple, str] = {}
-    print(f"  Seeding {len(groups)} baseline items for vehicle type '{vehicle_type_name}' ...")
-    for key, g in groups.items():
+    release_ids: dict[tuple, int] = {}          # node key -> its current release id
+    train_item_id: int | None = None
+    train_release_id: int | None = None
+    subsystem_item_id: dict[str, int] = {}       # subsystem name -> item id
+    subsystem_release_id: dict[str, int] = {}    # subsystem name -> current release id
+    seeded = 0
+
+    print(f"  Seeding baseline items for vehicle type '{vehicle_type_name}' ...")
+    for key, g in ordered:
         subsystem, system_component, level, name = key
         current_version = g["versions"][0] if g["versions"] else ""
         # Skip malformed version-less software rows (not valid baseline entries)
@@ -199,40 +216,88 @@ def populate_full_baseline(current_items: list[dict], changes: list[dict],
         sample = g["sample"]
         software_type = SEED_LEVELS[level] or sample.get("software_type", "Other")
         component_id = client.ensure_component(system_component) if system_component else None
+
+        # link this node to its parent in the item tree
+        if level == "Subsystem":
+            parent_item_id = train_item_id
+            parent_release_id = train_release_id
+        elif level == "Software":
+            parent_item_id = subsystem_item_id.get(subsystem)
+            parent_release_id = subsystem_release_id.get(subsystem)
+        else:  # Train baseline = root
+            parent_item_id = None
+            parent_release_id = None
+
         item = client.create_software_item(
             name=name, software_type=software_type,
-            component_id=component_id, vehicle_type_id=vt_id,
+            component_id=component_id, vehicle_type_id=vt_id, parent_id=parent_item_id,
         )
         item_ids[key] = item["id"]
         seeded_version[key] = current_version
+        seeded += 1
+
+        release_id = None
         if current_version:
-            client.create_software_release(item_id=item["id"], version_string=current_version)
+            rel = client.create_software_release(
+                item_id=item["id"], version_string=current_version,
+                parent_ids=[parent_release_id] if parent_release_id else None,
+            )
+            release_id = rel["id"]
+            release_ids[key] = release_id
+
+        if level == "Train baseline":
+            train_item_id = item["id"]
+            train_release_id = release_id
+        elif level == "Subsystem":
+            subsystem_item_id[subsystem] = item["id"]
+            subsystem_release_id[subsystem] = release_id
 
     # 3. apply delivery changes as new releases on the matching items (only when
-    #    the delivered version differs from the currently installed one)
+    #    the delivered version differs from the currently installed one). The new
+    #    release inherits the same parent in the tree as the item's current one.
     applied = 0
     for ch in changes:
         if ch.get("level", "") not in SEED_LEVELS:
             continue
         key = _group_key(ch)
+        subsystem = key[0]
+        level = key[2]
         introduced = ch.get("introduced") or ([ch.get("version", "")] if ch.get("version") else [])
         target = item_ids.get(key)
         if target is None:  # genuinely new item not in current baseline
-            software_type = SEED_LEVELS[ch["level"]] or ch.get("software_type", "Other")
+            software_type = SEED_LEVELS[level] or ch.get("software_type", "Other")
             component_id = client.ensure_component(ch.get("system_component", "")) if ch.get("system_component") else None
+            if level == "Software":
+                parent_item_id = subsystem_item_id.get(subsystem)
+            elif level == "Subsystem":
+                parent_item_id = train_item_id
+            else:
+                parent_item_id = None
             obj = client.create_software_item(
                 name=ch.get("name", ""), software_type=software_type,
-                component_id=component_id, vehicle_type_id=vt_id,
+                component_id=component_id, vehicle_type_id=vt_id, parent_id=parent_item_id,
             )
             target = obj["id"]
             item_ids[key] = target
             seeded_version[key] = ""
+
+        # parent release for the update mirrors the item's place in the tree
+        if level == "Software":
+            update_parent = subsystem_release_id.get(subsystem)
+        elif level == "Subsystem":
+            update_parent = train_release_id
+        else:
+            update_parent = None
+
         for version in introduced:
             if version and version != seeded_version.get(key):
-                client.create_software_release(item_id=target, version_string=version)
+                client.create_software_release(
+                    item_id=target, version_string=version,
+                    parent_ids=[update_parent] if update_parent else None,
+                )
                 applied += 1
 
     client.close()
-    stats = {"vehicle_type_id": vt_id, "seeded_items": len(groups), "updates_applied": applied}
-    print(f"  ✓ Seeded {stats['seeded_items']} items; applied {stats['updates_applied']} update release(s).")
+    stats = {"vehicle_type_id": vt_id, "seeded_items": seeded, "updates_applied": applied}
+    print(f"  ✓ Seeded {stats['seeded_items']} items in a tree; applied {stats['updates_applied']} update release(s).")
     return stats
