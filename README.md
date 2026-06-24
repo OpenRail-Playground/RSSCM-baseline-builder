@@ -1,5 +1,9 @@
 # RSSCM Baseline Builder
 
+<p align="center">
+  <img alt="Hack4Rail Logo" src="img/hack4rail-logo.jpg" width="400"/>
+</p>
+
 > The "magic" import pipeline that turns a chaotic supplier software delivery
 > into a clean, standardized train-software baseline — and pushes it to the
 > RSSCM backend so everyone works from the same source of truth.
@@ -8,6 +12,10 @@ Part of the [Hack4Rail 2026](https://hack4rail.org/) challenge
 *Rolling Stock Software Configuration Management*, built by the **tools** group.
 The data-model / backend lives in the companion repo
 [`OpenRail-Playground/RSSCM`](https://github.com/OpenRail-Playground/RSSCM).
+
+This project has been initiated during the
+[Hack4Rail 2026](https://hack4rail.org/), a joint hackathon organised by the
+railway companies SBB, ÖBB, and DB in partnership with the OpenRail Association.
 
 ---
 
@@ -229,3 +237,7 @@ uv run rsscm/manage.py runserver
 - Subsystem/parent linking in the backend tree is flat for now (component-level).
 - Intra-document data conflicts (Tree vs context tables) are resolved in favor
   of the Tree; flagging them as data-quality warnings would be a useful add.
+
+## License
+
+The content of this repository is licensed under the [Apache 2.0 license](LICENSE).
