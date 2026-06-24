@@ -26,6 +26,7 @@ class RsscmApiClient:
         # name -> id caches to avoid duplicate creates within a run
         self._manufacturers: dict[str, int] = {}
         self._components: dict[str, int] = {}
+        self._vehicle_types: dict[str, int] = {}
         self._fake_id = 0
 
     def _post(self, endpoint: str, payload: dict) -> dict:
@@ -59,8 +60,20 @@ class RsscmApiClient:
             self._components[name] = obj["id"]
         return self._components[name]
 
+    def ensure_vehicle_type(self, name: str, evn_scheme: str | None = None) -> int | None:
+        if not name:
+            return None
+        if name not in self._vehicle_types:
+            payload = {"name": name}
+            if evn_scheme:
+                payload["evn_scheme"] = evn_scheme
+            obj = self._post("vehicle-types", payload)
+            self._vehicle_types[name] = obj["id"]
+        return self._vehicle_types[name]
+
     def create_software_item(self, name: str, software_type: str, parent_id: int | None = None,
-                             component_id: int | None = None, manufacturer_id: int | None = None) -> dict:
+                             component_id: int | None = None, manufacturer_id: int | None = None,
+                             vehicle_type_id: int | None = None) -> dict:
         payload = {"name": name, "software_type": software_type}
         if parent_id is not None:
             payload["parent_id"] = parent_id
@@ -68,6 +81,8 @@ class RsscmApiClient:
             payload["component_id"] = component_id
         if manufacturer_id is not None:
             payload["manufacturer_id"] = manufacturer_id
+        if vehicle_type_id is not None:
+            payload["vehicle_type_id"] = vehicle_type_id
         return self._post("software-items", payload)
 
     def create_software_release(self, item_id: int, version_string: str,
@@ -126,3 +141,98 @@ def push_to_backend(clean_items: list[dict], api_url: str = "http://localhost:80
 
     print(f"  ✓ {pushed} items pushed.")
     return pushed
+
+
+# Tree levels we seed as SoftwareItems, with their RSSCM software_type
+SEED_LEVELS = {
+    "Train baseline": "Train Baseline",
+    "Subsystem": "Subsystem Baseline",
+    "Software": None,  # use the item's own normalized software_type
+}
+
+
+def _group_key(item: dict) -> tuple:
+    return (
+        item.get("subsystem", "").strip(),
+        item.get("system_component", "").strip(),
+        item.get("level", "").strip(),
+        item.get("name", "").strip(),
+    )
+
+
+def populate_full_baseline(current_items: list[dict], changes: list[dict],
+                           vehicle_type_name: str, api_url: str = "http://localhost:8000/api/v1/",
+                           dry_run: bool = False) -> dict:
+    """Seed the full current train baseline as a VehicleType (Train X), then
+    apply the delivery's changes as additional releases on the matching items.
+
+    After this runs the backend holds the realistic current configuration of the
+    train plus the proposed updates, so it can be queried (per train, per
+    component, or "what needs updating").
+    """
+    client = RsscmApiClient(api_url, dry_run=dry_run)
+    vt_id = client.ensure_vehicle_type(vehicle_type_name)
+
+    # 1. group current items by node identity -> distinct current versions
+    groups: dict[tuple, dict] = {}
+    for it in current_items:
+        if it.get("level", "") not in SEED_LEVELS:
+            continue
+        g = groups.setdefault(_group_key(it), {"versions": [], "sample": it})
+        v = (it.get("version", "") or "").strip()
+        if v and v not in g["versions"]:
+            g["versions"].append(v)
+
+    # 2. seed items + ONE current release each, remembering item ids + version.
+    #    (The source can list the same item at different versions across car
+    #    instances/variants; for a single train baseline we take one current
+    #    version, so a later delivery version shows up cleanly as "needs update".)
+    item_ids: dict[tuple, int] = {}
+    seeded_version: dict[tuple, str] = {}
+    print(f"  Seeding {len(groups)} baseline items for vehicle type '{vehicle_type_name}' ...")
+    for key, g in groups.items():
+        subsystem, system_component, level, name = key
+        current_version = g["versions"][0] if g["versions"] else ""
+        # Skip malformed version-less software rows (not valid baseline entries)
+        if level == "Software" and not current_version:
+            continue
+        sample = g["sample"]
+        software_type = SEED_LEVELS[level] or sample.get("software_type", "Other")
+        component_id = client.ensure_component(system_component) if system_component else None
+        item = client.create_software_item(
+            name=name, software_type=software_type,
+            component_id=component_id, vehicle_type_id=vt_id,
+        )
+        item_ids[key] = item["id"]
+        seeded_version[key] = current_version
+        if current_version:
+            client.create_software_release(item_id=item["id"], version_string=current_version)
+
+    # 3. apply delivery changes as new releases on the matching items (only when
+    #    the delivered version differs from the currently installed one)
+    applied = 0
+    for ch in changes:
+        if ch.get("level", "") not in SEED_LEVELS:
+            continue
+        key = _group_key(ch)
+        introduced = ch.get("introduced") or ([ch.get("version", "")] if ch.get("version") else [])
+        target = item_ids.get(key)
+        if target is None:  # genuinely new item not in current baseline
+            software_type = SEED_LEVELS[ch["level"]] or ch.get("software_type", "Other")
+            component_id = client.ensure_component(ch.get("system_component", "")) if ch.get("system_component") else None
+            obj = client.create_software_item(
+                name=ch.get("name", ""), software_type=software_type,
+                component_id=component_id, vehicle_type_id=vt_id,
+            )
+            target = obj["id"]
+            item_ids[key] = target
+            seeded_version[key] = ""
+        for version in introduced:
+            if version and version != seeded_version.get(key):
+                client.create_software_release(item_id=target, version_string=version)
+                applied += 1
+
+    client.close()
+    stats = {"vehicle_type_id": vt_id, "seeded_items": len(groups), "updates_applied": applied}
+    print(f"  ✓ Seeded {stats['seeded_items']} items; applied {stats['updates_applied']} update release(s).")
+    return stats
