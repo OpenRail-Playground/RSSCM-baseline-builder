@@ -140,31 +140,50 @@ def run(delivery, current, api_url, store, level, dry_run):
 
 @main.command()
 @click.option("--current-state", "current", type=click.Path(exists=True), required=True, help="Full current train state export.")
-@click.option("--delivery", type=click.Path(exists=True), required=True, help="Provider delivery (zip/file).")
-@click.option("--vehicle-type", default="Hacktrain", help="Train identity to attach the baseline to.")
+@click.option("--delivery", type=click.Path(exists=True), default=None, help="Provider delivery (zip/file) — only needed with --apply-updates.")
+@click.option("--fixture", type=click.Path(), default=None, help="Write a Django loaddata fixture to this path instead of pushing (faithful match incl. component_revision).")
+@click.option("--apply-updates", is_flag=True, help="Also append the delivery's introduced versions as extra releases (off = pure current-baseline match).")
 @click.option("--api-url", default="http://localhost:8000/api/v1/", help="Django backend URL.")
 @click.option("--dry-run", is_flag=True, help="Print payloads without calling API.")
-def populate(current, delivery, vehicle_type, api_url, dry_run):
-    """Populate the backend with the FULL current train baseline (as a vehicle
-    type) and apply the delivery's updates — a realistic, queryable dataset."""
-    from rsscm_import.delivery import parse_delivery
+def populate(current, delivery, fixture, apply_updates, api_url, dry_run):
+    """Build the train baseline model (Train → Subsystem → System → Software,
+    with Hardware/Bare Metal components — matching the RSSCM example/v2.json) from
+    the current train state, then either push it to the backend or write a Django
+    loaddata fixture (--fixture). Use --apply-updates to also fold in a delivery."""
     from rsscm_import.cmdb import read_current_state
-    from rsscm_import.diff import compute_diff, summarize
-    from rsscm_import.api_client import populate_full_baseline
+    from rsscm_import import baseline_v2 as baseline
 
     click.echo("=== Loading full current train state ===")
     current_items = read_current_state(current)
     click.echo(f"  {len(current_items)} items.")
 
-    click.echo("\n=== Parsing delivery & computing updates ===")
-    delivery_items = [i.to_dict() for i in parse_delivery(delivery)]
-    changes = summarize(compute_diff(delivery_items, current_items))["changes"]
-    click.echo(f"  {len(changes)} change(s) from the delivery.")
+    click.echo("\n=== Building baseline model (Train → Subsystem → System → Software) ===")
+    model = baseline.build_model(current_items)
+    click.echo(f"  {len(model.items)} items, {len(model.components)} hardware components.")
 
-    click.echo(f"\n=== Populating backend (vehicle type: {vehicle_type}) ===")
-    stats = populate_full_baseline(current_items, changes, vehicle_type, api_url=api_url, dry_run=dry_run)
-    click.echo(f"\n✓ Backend populated: {stats['seeded_items']} baseline items, "
-               f"{stats['updates_applied']} pending update(s).")
+    if apply_updates:
+        if not delivery:
+            raise click.UsageError("--apply-updates requires --delivery")
+        from rsscm_import.delivery import parse_delivery
+        from rsscm_import.diff import compute_diff, summarize
+        delivery_items = [i.to_dict() for i in parse_delivery(delivery)]
+        changes = summarize(compute_diff(delivery_items, current_items))["changes"]
+        applied = baseline.apply_updates(model, changes)
+        click.echo(f"  applied {applied} delivery update release(s).")
+
+    if fixture:
+        import json
+        data = baseline.to_fixture(model)
+        with open(fixture, "w") as fh:
+            json.dump(data, fh, indent=2)
+        click.echo(f"\n✓ Wrote loaddata fixture ({len(data)} objects) to {fixture}")
+        click.echo(f"  Load it with:  python manage.py loaddata {fixture}")
+        return
+
+    click.echo(f"\n=== Pushing baseline to {api_url} ===")
+    stats = baseline.push_via_api(model, api_url=api_url, dry_run=dry_run)
+    click.echo(f"\n✓ Pushed {stats['items']} items, {stats['components']} components, "
+               f"{stats['releases']} releases (note: component_revision not settable via API).")
 
 
 @main.command()
